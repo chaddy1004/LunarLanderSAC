@@ -29,6 +29,7 @@ else:
 
 class SAC:
     def __init__(self, n_states, n_actions):
+        # hyper parameters
         self.replay_size = 1000000
         self.experience_replay = deque(maxlen=self.replay_size)
         self.n_actions = n_actions
@@ -36,102 +37,49 @@ class SAC:
         self.lr = 0.0003
         self.batch_size = 128
         self.gamma = 0.99
-        self.actor = Actor(n_states=n_states, n_actions=n_actions).to(DEVICE)
-        self.critic = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
-        self.critic2 = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
-
-        self.target_critic = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
-        self.target_critic2 = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
         self.H = -2
         self.Tau = 0.01
-        # self.alpha = 0.2
-        self.log_alpha = torch.tensor(0.0, device=DEVICE, requires_grad=True)
-        self.optim_alpha = Adam(params=[self.log_alpha], lr=self.lr)
-        self.alpha = 0.2
 
+        # actor network
+        self.actor = Actor(n_states=n_states, n_actions=n_actions).to(DEVICE)
+
+        # dual critic network, with corresponding targets
+        self.critic = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
+        self.critic2 = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
+        self.target_critic = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
+        self.target_critic2 = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
+
+        # make the target critics start off same as the main networks
         for target_param, local_param in zip(self.target_critic.parameters(), self.critic.parameters()):
             target_param.data.copy_(local_param)
 
         for target_param, local_param in zip(self.target_critic2.parameters(), self.critic2.parameters()):
             target_param.data.copy_(local_param)
 
+        # temperature variable
+        self.log_alpha = torch.tensor(0.0, device=DEVICE, requires_grad=True)
+        self.optim_alpha = Adam(params=[self.log_alpha], lr=self.lr)
+        self.alpha = 0.2
+
         self.optim_actor = Adam(params=self.actor.parameters(), lr=self.lr)
         self.optim_critic = Adam(params=self.critic.parameters(), lr=self.lr)
         self.optim_critic_2 = Adam(params=self.critic2.parameters(), lr=self.lr)
 
-    # def get_action(self, state, test=False):
-    #     mean, logstd = self.actor(state.float())  # (batch, n_actions*2)
-    #     # mean, logstd = mean_and_logvar[:, 0:self.n_actions], mean_and_logvar[:,
-    #     #                                                      self.n_actions:]  # (batch, n_actions*2) each
-    #     logstd = torch.clamp(logstd, -20, 2)
-    #     std = torch.exp(logstd)
-    #
-    #     dist = Normal(mean, std)
-    #     u = dist.rsample()  # (batch, n_actions)
-    #     # to bound the action within [-1, 1]
-    #     # This was used in the paper, but it also matches with LunarLander's action bound as well
-    #     # print("u",u)
-    #     if (torch.isnan(u)).any():
-    #         for name, param in self.actor.named_parameters():
-    #             if param.requires_grad:
-    #                 print(name, param.data)
-    #         print(state)
-    #         print(f"mean:{mean}, logstd:{logstd}, std:{std}")
-    #         exit(0)
-    #     sampled_action = torch.tanh(u)
-    #
-    #     # sum is there to get the actual probability of this random variable
-    #     # All of the dimensions are treated as independent variables
-    #     # Therefore multipliying probability of each values in the vector will result in total sum
-    #     # However, since this is the log probability, instead of multiplying, you would add instead
-    #     # mu_log_prob = torch.sum(dist.log_prob(u), 1, keepdim=True)  # log prob of mu(u|s)
-    #     mu_log_prob = dist.log_prob(u)
-    #     pi_log_prob = torch.sum((mu_log_prob - torch.log(1 - sampled_action.pow(2) + 0.0001)), dim=1,
-    #                             keepdim=True)  # (batch, 1)
-    #     if not test:
-    #         return sampled_action, pi_log_prob
-    #     else:
-    #         return torch.tanh(mean).detach().cpu().numpy().squeeze(), pi_log_prob
-
     def get_v(self, state_batch, action, log_action_probs):
-        action = action.detach()  # (batch, n_actions)
-        log_action_probs = log_action_probs.detach()  # (batch, 1)
-        s_a_pair = torch.cat([state_batch, action], dim=1)
-        q_values = self.target_critic(s_a_pair).detach()  # (batch, 1)
-        q_values_2 = self.target_critic2(s_a_pair).detach()
-        # print(q_values, q_values_2)
-        value = torch.min(q_values, q_values_2) - self.alpha * log_action_probs
-        return value.detach()  # (batch, 1)
+        # TODO: move code from main train() function
+        return
 
-    # actor -> policy network (improve policy network)
     def train_actor(self, s_currs):
-        sample_action, log_action_probs = self.actor.get_action(state=s_currs, train=True)
-        q_values = self.critic(state).detach()
-        q_values_2 = self.critic2(s_a_pair).detach()
-        loss = (self.alpha * log_action_probs) - torch.min(q_values, q_values_2)
-        # print(self.alpha, log_action_probs.mean())
-        # print(torch.min(q_values, q_values_2).mean())
-        loss = torch.mean(loss)
-        self.optim_actor.zero_grad()
-        # print(loss)
-        loss.backward()
-        self.optim_actor.step()
-
-        alpha_loss = torch.mean(-1 * self.log_alpha * (log_action_probs.detach() + self.H))
-        self.optim_alpha.zero_grad()
-        alpha_loss.backward()
-        self.optim_alpha.step()
-        self.alpha = torch.exp(self.log_alpha)
+        # TODO: move code from main train() function
+        return
 
     def train_alpha(self, s_currs, log_action_probs):
-        self.optim_alpha.zero_grad()
-        sample_action, log_action_probs = self.actor.get_action(state=s_currs, train=True)
-        loss = -1 * self.log_alpha * (log_action_probs + self.H)
-        loss = torch.mean(loss)
-        # print(loss)
-        loss.backward()
+        # TODO: move code from main train() function
+        return
 
-        self.optim_alpha.step()
+    def train_critic(self, s_currs, a_currs, r, s_nexts, dones, a_nexts, log_action_probs_next):
+        # TODO: move code from main train() function
+        return
 
     def process_batch(self, x_batch):
         s_currs = torch.zeros((self.batch_size, self.n_states))
@@ -147,28 +95,7 @@ class SAC:
             s_nexts[batch] = x_batch[batch].s_next
             dones[batch] = x_batch[batch].done
         dones = dones.float()
-
         return s_currs.to(DEVICE), a_currs.to(DEVICE), r.to(DEVICE), s_nexts.to(DEVICE), dones.to(DEVICE)
-
-    def train_critic(self, s_currs, a_currs, r, s_nexts, dones, a_nexts, log_action_probs_next):
-        # using equation (5) from the second paper
-        s_a_pair = torch.cat([s_currs, a_currs], dim=1)
-        predicts = self.critic(s_a_pair)  # (batch, actions)
-        predicts2 = self.critic2(s_a_pair)
-
-        v_vector = self.get_v(s_nexts, a_nexts, log_action_probs_next)
-
-        target = r + (1 - dones) * self.gamma * v_vector
-        loss = mse_loss_function(predicts, target)
-        self.optim_critic.zero_grad()
-        loss.backward()
-        self.optim_critic.step()
-
-        loss2 = mse_loss_function(predicts2, target)
-        self.optim_critic_2.zero_grad()
-        loss2.backward()
-        self.optim_critic_2.step()
-        return
 
     def train(self, x_batch):
         s_currs, a_currs, r, s_nexts, dones = self.process_batch(x_batch=x_batch)
@@ -178,10 +105,8 @@ class SAC:
         predicts = self.critic(s_currs, a_currs)  # (batch, actions)
         predicts2 = self.critic2(s_currs, a_currs)
 
-        # s_a_pair = torch.cat([s_nexts, a_nexts.detach()], dim=1)
         q_values = self.target_critic(s_nexts, a_nexts).detach()  # (batch, 1)
         q_values_2 = self.target_critic2(s_nexts, a_nexts).detach()
-        # print(q_values, q_values_2)
         value = torch.min(q_values, q_values_2) - self.alpha * log_action_probs_next
 
         target = r + ((1 - dones) * self.gamma * value.detach())
@@ -253,11 +178,6 @@ def main(episodes, exp_name):
                 a_curr = a_curr_tensor.cpu().numpy().flatten()
 
             s_next, r, done, _ = env.step(a_curr)
-            # if ep > 23:
-            #     env.render()
-            # print(a_curr)
-            # print(r, done)
-            # s_next = s_next.flatten() # for mountain car
 
             s_next = np.reshape(s_next, (1, n_states))
             s_next_tensor = torch.from_numpy(s_next)
@@ -293,32 +213,13 @@ def main(episodes, exp_name):
     return agent
 
 
-def env_with_render(agent):
-    done = False
-    env = gym.make('LunarLanderContinuous-v2')
-    # env = gym.make('MountainCarContinuous-v0')
-    score = 0
-    states = env.observation_space.shape[0]  # shape returns a tuple
-    s_curr = np.reshape(env.reset(), (1, states))
-    while True:
-        if done:
-            print(score)
-            score = 0
-            s_curr = np.reshape(env.reset(), (1, states))
-        env.render()
-        s_curr_tensor = torch.from_numpy(s_curr)
-        a_curr, _ = agent.actor.get_action(s_curr_tensor, train=False)
-        s_next, r, done, _ = env.step(a_curr)
-        s_next = np.reshape(s_next, (1, states))
-        s_curr = s_next
-        score += r
-
-
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--exp_name", type=str, default="SAC_LunarLander_Score", help="exp_name")
     ap.add_argument("--episodes", type=int, default=700, help="number of episodes to run")
     args = vars(ap.parse_args())
     trained_agent = main(episodes=args["episodes"], exp_name=args["exp_name"])
-    torch.save(trained_agent.actor, "policy.pt")
-    # env_with_render(agent=trained_agent)
+    if DEVICE == torch.device('cpu'):
+        torch.save(trained_agent.actor, "policy_trained_on_cpu.pt")
+    else:
+        torch.save(trained_agent.actor, "policy_trained_on_gpu.pt")

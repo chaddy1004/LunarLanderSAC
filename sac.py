@@ -6,7 +6,6 @@ from collections import namedtuple, deque
 import gym
 import numpy as np
 import torch
-from torch.distributions import Normal
 from torch.optim import Adam
 from torch.nn import Parameter
 
@@ -20,6 +19,13 @@ mse_loss_function = torch.nn.MSELoss()
 
 torch.autograd.set_detect_anomaly(True)
 
+if torch.cuda.device_count() > 0:
+    print("RUNNING ON GPU")
+    DEVICE = torch.device('cuda')
+else:
+    print("RUNNING ON CPU")
+    DEVICE = torch.device('cpu')
+
 
 class SAC:
     def __init__(self, n_states, n_actions):
@@ -30,16 +36,16 @@ class SAC:
         self.lr = 0.0003
         self.batch_size = 128
         self.gamma = 0.99
-        self.actor = Actor(n_states=n_states, n_actions=n_actions)
-        self.critic = Critic(n_states=n_states, n_actions=n_actions)
-        self.critic2 = Critic(n_states=n_states, n_actions=n_actions)
+        self.actor = Actor(n_states=n_states, n_actions=n_actions).to(DEVICE)
+        self.critic = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
+        self.critic2 = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
 
-        self.target_critic = Critic(n_states=n_states, n_actions=n_actions)
-        self.target_critic2 = Critic(n_states=n_states, n_actions=n_actions)
+        self.target_critic = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
+        self.target_critic2 = Critic(n_states=n_states, n_actions=n_actions).to(DEVICE)
         self.H = -2
         self.Tau = 0.01
         # self.alpha = 0.2
-        self.log_alpha = Parameter(torch.tensor(0.0))
+        self.log_alpha = torch.tensor(0.0, device=DEVICE, requires_grad=True)
         self.optim_alpha = Adam(params=[self.log_alpha], lr=self.lr)
         self.alpha = 0.2
 
@@ -100,7 +106,6 @@ class SAC:
     # actor -> policy network (improve policy network)
     def train_actor(self, s_currs):
         sample_action, log_action_probs = self.actor.get_action(state=s_currs, train=True)
-        s_a_pair = torch.cat([s_currs, sample_action], dim=1)
         q_values = self.critic(state).detach()
         q_values_2 = self.critic2(s_a_pair).detach()
         loss = (self.alpha * log_action_probs) - torch.min(q_values, q_values_2)
@@ -143,7 +148,7 @@ class SAC:
             dones[batch] = x_batch[batch].done
         dones = dones.float()
 
-        return s_currs, a_currs, r, s_nexts, dones
+        return s_currs.to(DEVICE), a_currs.to(DEVICE), r.to(DEVICE), s_nexts.to(DEVICE), dones.to(DEVICE)
 
     def train_critic(self, s_currs, a_currs, r, s_nexts, dones, a_nexts, log_action_probs_next):
         # using equation (5) from the second paper
@@ -165,7 +170,7 @@ class SAC:
         self.optim_critic_2.step()
         return
 
-    def train(self, x_batch, step):
+    def train(self, x_batch):
         s_currs, a_currs, r, s_nexts, dones = self.process_batch(x_batch=x_batch)
 
         a_nexts, log_action_probs_next = self.actor.get_action(s_nexts, train=True)
@@ -200,7 +205,7 @@ class SAC:
         loss_actor.backward()
         self.optim_actor.step()
 
-        alpha_loss = torch.mean((-1 * torch.exp(self.log_alpha)) * (log_action_probs.detach()+ self.H))
+        alpha_loss = torch.mean((-1 * torch.exp(self.log_alpha)) * (log_action_probs.detach() + self.H))
         self.optim_alpha.zero_grad()
         alpha_loss.backward()
         self.optim_alpha.step()
@@ -240,7 +245,7 @@ def main(episodes, exp_name):
                 a_curr = env.action_space.sample()
                 a_curr_tensor = torch.from_numpy(a_curr).unsqueeze(0)
             else:
-                a_curr_tensor, _ = agent.actor.get_action(s_curr_tensor, train=True)
+                a_curr_tensor, _ = agent.actor.get_action(s_curr_tensor.to(DEVICE), train=True)
                 # this detach is necessary as the action tensor gets concatenated with state tensor when passed in to critic
                 # without this detach, each action tensor keeps its graph, and when same action gets sampled from buffer,
                 # it considers that graph "already processed" so it will throw an error
@@ -248,7 +253,8 @@ def main(episodes, exp_name):
                 a_curr = a_curr_tensor.cpu().numpy().flatten()
 
             s_next, r, done, _ = env.step(a_curr)
-            # env.render()
+            # if ep > 23:
+            #     env.render()
             # print(a_curr)
             # print(r, done)
             # s_next = s_next.flatten() # for mountain car
@@ -274,7 +280,7 @@ def main(episodes, exp_name):
                 agent.experience_replay.append(sample)
                 if ep > exploration_eps:
                     x_batch = random.sample(agent.experience_replay, agent.batch_size)
-                    agent.train(x_batch, step)
+                    agent.train(x_batch)
 
             s_curr = s_next
             score += r

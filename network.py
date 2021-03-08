@@ -66,8 +66,12 @@ class Actor(Module):
         # Therefore multipliying probability of each values in the vector will result in total sum
         # However, since this is the log probability, instead of multiplying, you would add instead
         # mu_log_prob = torch.sum(dist.log_prob(u), 1, keepdim=True)  # log prob of mu(u|s)
-        log_pi = dist.log_prob(u) - torch.log(1 - sampled_action.pow(2) + 1e-6)
-        log_pi = log_pi.sum(1, keepdim=True)
+        log_pi = torch.sum(dist.log_prob(u), 1, keepdim=True) - torch.sum(torch.log(1 - sampled_action.pow(2) + 1e-6),
+                                                                          1, keepdim=True)
+
+        # log_pi = dist.log_prob(u) - torch.log(1 - sampled_action.pow(2) + 1e-6)
+
+        # log_pi = log_pi.sum(1, keepdim=True)
         if train:
             return sampled_action, log_pi
         else:
@@ -82,11 +86,6 @@ class Critic(Module):
         self.lin2 = Sequential(Linear(in_features=500, out_features=500), ReLU())
         # for each action, you produce corresponding mean and variance
         self.final_lin = Linear(in_features=500, out_features=1)
-
-        # self.apply(weights_init)
-
-        # self.final_lin.weight.data.uniform_(-0.003, 0.003)
-        # self.final_lin.bias.data.uniform_(-0.003, 0.003)
 
     def forward(self, state, action):
         x = torch.cat([state, action], dim=1)

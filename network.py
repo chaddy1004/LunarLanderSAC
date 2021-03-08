@@ -15,18 +15,6 @@ mse_loss_function = torch.nn.MSELoss()
 torch.autograd.set_detect_anomaly(True)
 
 
-def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Linear') != -1:
-        try:
-            print("Initializing")
-            init.uniform_(m.weight.data, -0.003, 0.003)
-            init.uniform_(m.bias.data, -0.003, 0.003)
-            # m.bias.data.fill_(0)
-        except AttributeError:
-            print("Skipping initialization of ", classname)
-
-
 class Actor(Module):
     def __init__(self, n_states, n_actions):
         super(Actor, self).__init__()

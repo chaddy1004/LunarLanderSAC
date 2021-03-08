@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch.optim import Adam
 from torch.nn import Parameter
-
+import tensorflow as tf
 from network import Actor, Critic
 
 torch.manual_seed(19971124)
@@ -224,7 +224,7 @@ class SAC:
 def main(episodes, exp_name):
     logdir = os.path.join("logs", exp_name)
     os.makedirs(logdir, exist_ok=True)
-    # writer = tf.summary.create_file_writer(logdir)
+    writer = tf.summary.create_file_writer(logdir)
     env = gym.make('LunarLanderContinuous-v2')
     # env = gym.make('MountainCarContinuous-v0')
     n_states = env.observation_space.shape[0]  # shape returns a tuple
@@ -287,9 +287,9 @@ def main(episodes, exp_name):
             step += 1
             if done:
                 print(f"ep:{ep}:################Goal Reached###################", score)
-                # with writer.as_default():
-                #     tf.summary.scalar("reward", r, ep)
-                #     tf.summary.scalar("score", score, ep)
+                with writer.as_default():
+                    tf.summary.scalar("reward", r, ep)
+                    tf.summary.scalar("score", score, ep)
     return agent
 
 
@@ -307,8 +307,7 @@ def env_with_render(agent):
             s_curr = np.reshape(env.reset(), (1, states))
         env.render()
         s_curr_tensor = torch.from_numpy(s_curr)
-        a_curr, _ = agent.get_action(s_curr_tensor, test=True)
-        print(a_curr)
+        a_curr, _ = agent.actor.get_action(s_curr_tensor, train=False)
         s_next, r, done, _ = env.step(a_curr)
         s_next = np.reshape(s_next, (1, states))
         s_curr = s_next
@@ -317,8 +316,9 @@ def env_with_render(agent):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exp_name", type=str, default="SAC", help="exp_name")
-    ap.add_argument("--episodes", type=int, default=2000, help="number of episodes to run")
+    ap.add_argument("--exp_name", type=str, default="SAC_LunarLander_Score", help="exp_name")
+    ap.add_argument("--episodes", type=int, default=700, help="number of episodes to run")
     args = vars(ap.parse_args())
     trained_agent = main(episodes=args["episodes"], exp_name=args["exp_name"])
-    env_with_render(agent=trained_agent)
+    torch.save(trained_agent.actor, "policy.pt")
+    # env_with_render(agent=trained_agent)

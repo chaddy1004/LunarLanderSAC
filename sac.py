@@ -6,12 +6,11 @@ from collections import namedtuple, deque
 import gym
 import numpy as np
 import torch
-import tensorflow as tf
-from torch.nn import Module, Linear, ReLU, Sequential, Softmax, Parameter
-from torch.utils.data import TensorDataset, DataLoader
-from torch.nn import functional as F
-from torch.optim import Adam
 from torch.distributions import Normal
+from torch.optim import Adam
+from torch.nn import Parameter
+
+from network import Actor, Critic
 
 torch.manual_seed(19971124)
 np.random.seed(42)
@@ -20,140 +19,109 @@ random.seed(101)
 mse_loss_function = torch.nn.MSELoss()
 
 torch.autograd.set_detect_anomaly(True)
-class Actor(Module):
-    def __init__(self, n_states, n_actions):
-        super(Actor, self).__init__()
-        # for cts critic, it can only outout Q(S,A), so it needs both action and state
-        self.lin1 = Sequential(Linear(in_features=n_states, out_features=64), ReLU())
-        # self.lin2 = Sequential(Linear(in_features=16, out_features=24), ReLU())
-        self.mu = Sequential(Linear(in_features=64, out_features=n_actions))
-        self.logstd = Sequential(Linear(in_features=64, out_features=n_actions))
-
-    def forward(self, x):
-        x = self.lin1(x)
-        # x = self.lin2(x)
-        mu = self.mu(x)
-        log_std = self.mu(x)
-        return mu, log_std
-
-
-class Critic(Module):
-    def __init__(self, n_states, n_actions):
-        super(Critic, self).__init__()
-        total_input_size = n_states + n_actions
-        self.lin1 = Sequential(Linear(in_features=total_input_size, out_features=64), ReLU())
-        # self.lin2 = Sequential(Linear(in_features=150, out_features=150), ReLU())
-        # for each action, you produce corresponding mean and variance
-        self.final_lin = Sequential(Linear(in_features=64, out_features=1))
-
-    def forward(self, x):
-        x = self.lin1(x)
-        # x = self.lin2(x)
-        # x = self.lin3(x)
-        # print(x)
-        output = self.final_lin(x)
-        return output
 
 
 class SAC:
     def __init__(self, n_states, n_actions):
-        self.replay_size = 100000
+        self.replay_size = 1000000
         self.experience_replay = deque(maxlen=self.replay_size)
         self.n_actions = n_actions
         self.n_states = n_states
         self.lr = 0.0003
         self.batch_size = 128
-        self.gamma = 0.999
+        self.gamma = 0.99
         self.actor = Actor(n_states=n_states, n_actions=n_actions)
         self.critic = Critic(n_states=n_states, n_actions=n_actions)
+        self.critic2 = Critic(n_states=n_states, n_actions=n_actions)
+
         self.target_critic = Critic(n_states=n_states, n_actions=n_actions)
+        self.target_critic2 = Critic(n_states=n_states, n_actions=n_actions)
+        self.H = -2
+        self.Tau = 0.01
+        # self.alpha = 0.2
+        self.log_alpha = Parameter(torch.tensor(0.0))
+        self.optim_alpha = Adam(params=[self.log_alpha], lr=self.lr)
+        self.alpha = 0.2
+
+        for target_param, local_param in zip(self.target_critic.parameters(), self.critic.parameters()):
+            target_param.data.copy_(local_param)
+
+        for target_param, local_param in zip(self.target_critic2.parameters(), self.critic2.parameters()):
+            target_param.data.copy_(local_param)
+
         self.optim_actor = Adam(params=self.actor.parameters(), lr=self.lr)
         self.optim_critic = Adam(params=self.critic.parameters(), lr=self.lr)
-        # self.H = 0.98 * (-np.log(1 / self.n_actions))
-        self.H = -2
-        self.Tau = 0.005
-        self.alpha = Parameter(torch.tensor(0.5))
-        self.optim_alpha = Adam(params=[self.alpha], lr=self.lr)
+        self.optim_critic_2 = Adam(params=self.critic2.parameters(), lr=self.lr)
 
-    def get_action(self, state, test=False):
-        mean, logstd = self.actor(state.float())  # (batch, n_actions*2)
-        # mean, logstd = mean_and_logvar[:, 0:self.n_actions], mean_and_logvar[:,
-        #                                                      self.n_actions:]  # (batch, n_actions*2) each
-        logstd = torch.clamp(logstd, -20, 2)
-        std = torch.exp(logstd)
+    # def get_action(self, state, test=False):
+    #     mean, logstd = self.actor(state.float())  # (batch, n_actions*2)
+    #     # mean, logstd = mean_and_logvar[:, 0:self.n_actions], mean_and_logvar[:,
+    #     #                                                      self.n_actions:]  # (batch, n_actions*2) each
+    #     logstd = torch.clamp(logstd, -20, 2)
+    #     std = torch.exp(logstd)
+    #
+    #     dist = Normal(mean, std)
+    #     u = dist.rsample()  # (batch, n_actions)
+    #     # to bound the action within [-1, 1]
+    #     # This was used in the paper, but it also matches with LunarLander's action bound as well
+    #     # print("u",u)
+    #     if (torch.isnan(u)).any():
+    #         for name, param in self.actor.named_parameters():
+    #             if param.requires_grad:
+    #                 print(name, param.data)
+    #         print(state)
+    #         print(f"mean:{mean}, logstd:{logstd}, std:{std}")
+    #         exit(0)
+    #     sampled_action = torch.tanh(u)
+    #
+    #     # sum is there to get the actual probability of this random variable
+    #     # All of the dimensions are treated as independent variables
+    #     # Therefore multipliying probability of each values in the vector will result in total sum
+    #     # However, since this is the log probability, instead of multiplying, you would add instead
+    #     # mu_log_prob = torch.sum(dist.log_prob(u), 1, keepdim=True)  # log prob of mu(u|s)
+    #     mu_log_prob = dist.log_prob(u)
+    #     pi_log_prob = torch.sum((mu_log_prob - torch.log(1 - sampled_action.pow(2) + 0.0001)), dim=1,
+    #                             keepdim=True)  # (batch, 1)
+    #     if not test:
+    #         return sampled_action, pi_log_prob
+    #     else:
+    #         return torch.tanh(mean).detach().cpu().numpy().squeeze(), pi_log_prob
 
-        dist = Normal(mean, std)
-        u = dist.rsample()  # (batch, n_actions)
-        # to bound the action within [-1, 1]
-        # This was used in the paper, but it also matches with LunarLander's action bound as well
-        # print("u",u)
-        if (torch.isnan(u)).any():
-            for name, param in self.actor.named_parameters():
-                if param.requires_grad:
-                    print(name, param.data)
-            print(state)
-            print(f"mean:{mean}, logstd:{logstd}, std:{std}")
-            exit(0)
-        sampled_action = torch.tanh(u)
-
-        # sum is there to get the actual probability of this random variable
-        # All of the dimensions are treated as independent variables
-        # Therefore multipliying probability of each values in the vector will result in total sum
-        # However, since this is the log probability, instead of multiplying, you would add instead
-        # mu_log_prob = torch.sum(dist.log_prob(u), 1, keepdim=True)  # log prob of mu(u|s)
-        mu_log_prob = dist.log_prob(u)
-        pi_log_prob = torch.sum((mu_log_prob - torch.log(1 - sampled_action.pow(2) + 0.0001)), dim=1, keepdim=True)  # (batch, 1)
-        if not test:
-            return sampled_action, pi_log_prob
-        else:
-            return torch.tanh(mean).detach().cpu().numpy().squeeze(), pi_log_prob
-
-    def get_v(self, state_batch):
-        sample_action, log_action_probs = self.get_action(state=state_batch, test=False)
-        sample_action = sample_action.detach()  # (batch, n_actions)
+    def get_v(self, state_batch, action, log_action_probs):
+        action = action.detach()  # (batch, n_actions)
         log_action_probs = log_action_probs.detach()  # (batch, 1)
-        s_a_pair = torch.cat([state_batch, sample_action], dim=1)
+        s_a_pair = torch.cat([state_batch, action], dim=1)
         q_values = self.target_critic(s_a_pair).detach()  # (batch, 1)
-        value = q_values - self.alpha * log_action_probs
-        return value  # (batch, 1)
-
-    def train_critic(self, s_currs, a_currs, r, s_nexts, dones):
-        # using equation (5) from the second paper
-        self.optim_critic.zero_grad()
-
-        s_a_pair = torch.cat([s_currs, a_currs], dim=1)
-        predicts = self.critic(s_a_pair)  # (batch, actions)
-        v_vector = self.get_v(s_nexts)
-
-        target = r + self.gamma * v_vector  # (batch, 1)
-        done_indices = np.argwhere(dones)
-        if done_indices.shape[1] > 0:
-            done_indices = torch.squeeze(dones.nonzero())
-            target[done_indices, 0] = torch.squeeze(r[done_indices])
-
-        loss = mse_loss_function(predicts, target)
-        loss.backward()
-        # print(loss)
-        self.optim_critic.step()
-        return
+        q_values_2 = self.target_critic2(s_a_pair).detach()
+        # print(q_values, q_values_2)
+        value = torch.min(q_values, q_values_2) - self.alpha * log_action_probs
+        return value.detach()  # (batch, 1)
 
     # actor -> policy network (improve policy network)
     def train_actor(self, s_currs):
-        # s_a_pair = torch.cat([s_currs, a_currs], dim=1)
-        self.optim_actor.zero_grad()
-        sample_action, log_action_probs = self.get_action(state=s_currs, test=False)
+        sample_action, log_action_probs = self.actor.get_action(state=s_currs, train=True)
         s_a_pair = torch.cat([s_currs, sample_action], dim=1)
-        q_values = self.critic(s_a_pair).detach()
-        loss = (self.alpha * log_action_probs) - q_values
+        q_values = self.critic(state).detach()
+        q_values_2 = self.critic2(s_a_pair).detach()
+        loss = (self.alpha * log_action_probs) - torch.min(q_values, q_values_2)
+        # print(self.alpha, log_action_probs.mean())
+        # print(torch.min(q_values, q_values_2).mean())
         loss = torch.mean(loss)
+        self.optim_actor.zero_grad()
         # print(loss)
         loss.backward()
         self.optim_actor.step()
 
-    def train_alpha(self, s_currs):
+        alpha_loss = torch.mean(-1 * self.log_alpha * (log_action_probs.detach() + self.H))
         self.optim_alpha.zero_grad()
-        sample_action, log_action_probs = self.get_action(state=s_currs, test=False)
-        loss = -1 * self.alpha * (log_action_probs + self.H)
+        alpha_loss.backward()
+        self.optim_alpha.step()
+        self.alpha = torch.exp(self.log_alpha)
+
+    def train_alpha(self, s_currs, log_action_probs):
+        self.optim_alpha.zero_grad()
+        sample_action, log_action_probs = self.actor.get_action(state=s_currs, train=True)
+        loss = -1 * self.log_alpha * (log_action_probs + self.H)
         loss = torch.mean(loss)
         # print(loss)
         loss.backward()
@@ -165,7 +133,7 @@ class SAC:
         a_currs = torch.zeros((self.batch_size, self.n_actions))
         r = torch.zeros((self.batch_size, 1))
         s_nexts = torch.zeros((self.batch_size, self.n_states))
-        dones = torch.zeros((self.batch_size,))
+        dones = torch.zeros((self.batch_size, 1))
 
         for batch in range(self.batch_size):
             s_currs[batch] = x_batch[batch].s_curr
@@ -173,19 +141,78 @@ class SAC:
             r[batch] = x_batch[batch].reward
             s_nexts[batch] = x_batch[batch].s_next
             dones[batch] = x_batch[batch].done
+        dones = dones.float()
 
         return s_currs, a_currs, r, s_nexts, dones
 
-    def train(self, x_batch):
+    def train_critic(self, s_currs, a_currs, r, s_nexts, dones, a_nexts, log_action_probs_next):
+        # using equation (5) from the second paper
+        s_a_pair = torch.cat([s_currs, a_currs], dim=1)
+        predicts = self.critic(s_a_pair)  # (batch, actions)
+        predicts2 = self.critic2(s_a_pair)
+
+        v_vector = self.get_v(s_nexts, a_nexts, log_action_probs_next)
+
+        target = r + (1 - dones) * self.gamma * v_vector
+        loss = mse_loss_function(predicts, target)
+        self.optim_critic.zero_grad()
+        loss.backward()
+        self.optim_critic.step()
+
+        loss2 = mse_loss_function(predicts2, target)
+        self.optim_critic_2.zero_grad()
+        loss2.backward()
+        self.optim_critic_2.step()
+        return
+
+    def train(self, x_batch, step):
         s_currs, a_currs, r, s_nexts, dones = self.process_batch(x_batch=x_batch)
-        self.train_critic(s_currs, a_currs, r, s_nexts, dones)
-        self.train_actor(s_currs)
-        self.train_alpha(s_currs)
+
+        a_nexts, log_action_probs_next = self.actor.get_action(s_nexts, train=True)
+
+        predicts = self.critic(s_currs, a_currs)  # (batch, actions)
+        predicts2 = self.critic2(s_currs, a_currs)
+
+        # s_a_pair = torch.cat([s_nexts, a_nexts.detach()], dim=1)
+        q_values = self.target_critic(s_nexts, a_nexts).detach()  # (batch, 1)
+        q_values_2 = self.target_critic2(s_nexts, a_nexts).detach()
+        # print(q_values, q_values_2)
+        value = torch.min(q_values, q_values_2) - self.alpha * log_action_probs_next
+
+        target = r + ((1 - dones) * self.gamma * value.detach())
+        loss = mse_loss_function(predicts, target)
+        self.optim_critic.zero_grad()
+        loss.backward()
+        self.optim_critic.step()
+
+        loss2 = mse_loss_function(predicts2, target)
+        self.optim_critic_2.zero_grad()
+        loss2.backward()
+        self.optim_critic_2.step()
+
+        sample_action, log_action_probs = self.actor.get_action(state=s_currs, train=True)
+        q_values_new = self.critic(s_currs, sample_action)
+        q_values_new_2 = self.critic2(s_currs, sample_action)
+        loss_actor = (self.alpha * log_action_probs) - torch.min(q_values_new, q_values_new_2)
+
+        loss_actor = torch.mean(loss_actor)
+        self.optim_actor.zero_grad()
+        loss_actor.backward()
+        self.optim_actor.step()
+
+        alpha_loss = torch.mean((-1 * torch.exp(self.log_alpha)) * (log_action_probs.detach()+ self.H))
+        self.optim_alpha.zero_grad()
+        alpha_loss.backward()
+        self.optim_alpha.step()
+        self.alpha = torch.exp(self.log_alpha)
         self.update_weights()
         return
 
     def update_weights(self):
         for target_param, local_param in zip(self.target_critic.parameters(), self.critic.parameters()):
+            target_param.data.copy_(self.Tau * local_param.data + (1.0 - self.Tau) * target_param.data)
+
+        for target_param, local_param in zip(self.target_critic2.parameters(), self.critic2.parameters()):
             target_param.data.copy_(self.Tau * local_param.data + (1.0 - self.Tau) * target_param.data)
 
 
@@ -198,33 +225,40 @@ def main(episodes, exp_name):
     n_states = env.observation_space.shape[0]  # shape returns a tuple
     n_actions = env.action_space.shape[0]
     agent = SAC(n_states=n_states, n_actions=n_actions)
-    warmup_ep = 0
-    exploration_eps = 100
+    exploration_eps = -1
     for ep in range(episodes):
         s_curr = env.reset()
         s_curr = np.reshape(s_curr, (1, n_states))
         s_curr = s_curr.astype(np.float32)
         done = False
         score = 0
-        agent.update_weights()  # update weight every time an episode ends
         step = 0
         while not done:
-            # env.render()
-            # if len(agent.experience_replay) == agent.replay_size:
-            #     env.render()
             s_curr_tensor = torch.from_numpy(s_curr)
-            a_curr_tensor, _ = agent.get_action(s_curr_tensor)
-            # print(a_curr_tensor)
-            # this detach is necessary as the action tensor gets concatenated with state tensor when passed in to critic
-            # without this detach, each action tensor keeps its graph, and when same action gets sampled from buffer,
-            # it considers that graph "already processed" so it will throw an error
-            a_curr_tensor = a_curr_tensor.detach()
-            s_next, r, done, _ = env.step(a_curr_tensor.cpu().numpy().flatten())
-            # s_next = s_next.flatten() # for mountain car
-            s_next_tensor = torch.from_numpy(s_next)
-            s_next = np.reshape(s_next, (1, n_states))
-            sample = namedtuple('sample', ['s_curr', 'a_curr', 'reward', 's_next', 'done'])
+            if ep < exploration_eps:
+                print("Exploring")
+                a_curr = env.action_space.sample()
+                a_curr_tensor = torch.from_numpy(a_curr).unsqueeze(0)
+            else:
+                a_curr_tensor, _ = agent.actor.get_action(s_curr_tensor, train=True)
+                # this detach is necessary as the action tensor gets concatenated with state tensor when passed in to critic
+                # without this detach, each action tensor keeps its graph, and when same action gets sampled from buffer,
+                # it considers that graph "already processed" so it will throw an error
+                a_curr_tensor = a_curr_tensor.detach()
+                a_curr = a_curr_tensor.cpu().numpy().flatten()
 
+            s_next, r, done, _ = env.step(a_curr)
+            # env.render()
+            # print(a_curr)
+            # print(r, done)
+            # s_next = s_next.flatten() # for mountain car
+
+            s_next = np.reshape(s_next, (1, n_states))
+            s_next_tensor = torch.from_numpy(s_next)
+            sample = namedtuple('sample', ['s_curr', 'a_curr', 'reward', 's_next', 'done'])
+            if step == 500:
+                print("RAN FOR TOO LONG")
+                done = True
             # must re-make training dataloader since the dataset is now updated with aggregation of new data
 
             sample.s_curr = s_curr_tensor
@@ -233,35 +267,23 @@ def main(episodes, exp_name):
             sample.s_next = s_next_tensor
             sample.done = done
 
-            if len(agent.experience_replay) < agent.replay_size:
+            if len(agent.experience_replay) < agent.batch_size:
                 agent.experience_replay.append(sample)
-                s_curr = s_next
                 print("appending to buffer....")
-                continue
             else:
                 agent.experience_replay.append(sample)
-                # # if step+1 % 100 == 0:
-                # #     for _ in range(4000):
-                # x_batch = random.sample(agent.experience_replay, agent.batch_size)
-                # agent.train(x_batch)
-                s_curr = s_next
+                if ep > exploration_eps:
+                    x_batch = random.sample(agent.experience_replay, agent.batch_size)
+                    agent.train(x_batch, step)
+
+            s_curr = s_next
             score += r
             step += 1
-
             if done:
-                if r >= 100 :
-                    print("Landed Successfully")
-                elif r == -100:
-                    print("Landed Unsuccessfully")
-                print(f"ep:{ep - warmup_ep}:################Goal Reached###################", score)
+                print(f"ep:{ep}:################Goal Reached###################", score)
                 # with writer.as_default():
                 #     tf.summary.scalar("reward", r, ep)
                 #     tf.summary.scalar("score", score, ep)
-            if step % 1000 == 0:
-                print("Training")
-                for j in range(1000):
-                    x_batch = random.sample(agent.experience_replay, agent.batch_size)
-                    agent.train(x_batch)
     return agent
 
 
@@ -290,7 +312,7 @@ def env_with_render(agent):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--exp_name", type=str, default="SAC", help="exp_name")
-    ap.add_argument("--episodes", type=int, default=2000*1000, help="number of episodes to run")
+    ap.add_argument("--episodes", type=int, default=2000, help="number of episodes to run")
     args = vars(ap.parse_args())
     trained_agent = main(episodes=args["episodes"], exp_name=args["exp_name"])
     env_with_render(agent=trained_agent)

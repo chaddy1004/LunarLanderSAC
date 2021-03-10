@@ -30,7 +30,7 @@ def env_with_render(policy):
             print(score)
             score = 0
             s_curr = np.reshape(env.reset(), (1, states))
-        env.rernder()
+        env.render()
         s_curr_tensor = torch.from_numpy(s_curr)
         a_curr, _ = policy.get_action(s_curr_tensor, train=False)
         s_next, r, done, _ = env.step(a_curr)
